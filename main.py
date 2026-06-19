@@ -11,7 +11,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 from telegram.error import TelegramError
 
 # --- Configuration (ဒီနေရာမှာ ရာနှုန်းပြည့် မှန်ကန်အောင် ပြင်ဆင်ထားပါတယ်) ---
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8840868848:AAEecPl4AWnvhdWBzZip_ZXYYnxgSclQo2w")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8840868848:AAGdJEYmfQ1yk-Qyi8OfVqUWQKLH3WMRlr0")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "5536833682"))
 
 DB_FILE = "users_db.json"
