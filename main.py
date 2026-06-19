@@ -9,7 +9,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 from telegram.error import TelegramError
 
 # --- Configuration (Railway Variables မှ ဖတ်ပါမည်) ---
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+BOT_TOKEN = os.getenv("8840868848:AAEecPl4AWnvhdWBzZip_ZXYYnxgSclQo2w")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "5536833682"))
 
 DB_FILE = "users_db.json"
