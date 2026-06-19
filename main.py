@@ -8,13 +8,13 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.error import TelegramError
 
-# --- Configuration (Railway Variables မှ ဖတ်ပါမည်) ---
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+# --- Configuration (Railway Variables သို့မဟုတ် စနစ်မှ ဖတ်ပါမည်) ---
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8840868848:AAEecPl4AWnvhdWBzZip_ZXYYnxgSclQo2w")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "5536833682"))
 
 DB_FILE = "users_db.json"
 
-# --- 🛡️ SECURITY FILTER FOR RAILWAY ---
+# --- 🛡️ SECURITY FILTER ---
 # ဟက်ကာများမှ စနစ်အား ဖျက်ဆီးရန် ကြိုးပမ်းနိုင်သည့် စကားလုံးများအား ကြိုတင်ပိတ်ဆို့ရန်
 DANGEROUS_KEYWORDS = [
     r"os\.system", r"subprocess\.", r"pty\.", r"shutil\.", r"open\(.*w.*?\)", r"open\(.*a.*?\)",
@@ -57,7 +57,7 @@ def check_user_status(user_id, db):
         
     user = db[uid]
     
-    # Free User အား ၂၄ နာရီပြည့်ပါက ၅ နာရီ (၁၈၀၀0 စက္ကန့်) ပြန် Reset ပေးခြင်း
+    # Free User အား ၂၄ နာရီပြည့်ပါက ၅ နာရီ ပြန် Reset ပေးခြင်း
     if user.get("role") == "free" and (now - user.get("last_free_reset", 0)) >= 86400:
         user["free_used_today"] = 0
         user["last_free_reset"] = now
@@ -203,9 +203,15 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file = await context.bot.get_file(document.file_id)
     await file.download_to_drive(file_name)
     
-    # 🛡️ ဖိုင်ဒေါင်းလုပ်လုပ်ပြီးသည်နှင့် အန္တရာယ်ရှိမရှိ ချက်ချင်းစစ်ဆေးခြင်း
     full_path = os.path.abspath(file_name)
-    is_safe, matched_pattern = is_code_safe(full_path)
+    
+    # 🛡️ 🛠️ [BUG FIX - ADMIN BYPASS]
+    # ပို့လိုက်သောသူသည် ADMIN_ID ဖြစ်ပါက စစ်ဆေးမှုကို ကျော်ခွင့်ပေးမည်၊ သာမန် User ဖြစ်ပါက မဖြစ်မနေ စစ်ဆေးမည်။
+    if user_id == ADMIN_ID:
+        is_safe, matched_pattern = True, None
+    else:
+        is_safe, matched_pattern = is_code_safe(full_path)
+        
     if not is_safe:
         os.remove(full_path) # အန္တရာယ်ရှိဖိုင်အား ချက်ချင်းဖျက်ပစ်ခြင်း
         await update.message.reply_text(f"❌ **လုံခြုံရေးအရ ငြင်းပယ်ခြင်း ခံရပါသည်!**\nသင့်ကုဒ်ထဲတွင် ခွင့်မပြုထားသော စနစ်သုံးစကားလုံး (`{matched_pattern}`) ပါဝင်နေသဖြင့် စနစ်မှ အလိုအလျောက် ပယ်ဖျက်လိုက်ပါသည်။")
@@ -251,8 +257,12 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(f"⚠️ သင့်အဆင့်၏ အများဆုံး Run ခွင့်ပြုချက် ({max_allowed} ဖိုင်) ပြည့်သွားပါပြီ။")
             return
 
-        # 🛡️ မောင်းနှင်ခါနီးတွင် ဒုတိယအကြိမ် စိတ်ချရအောင် ပြန်စစ်ဆေးခြင်း
-        is_safe, _ = is_code_safe(file_path)
+        # 🛡️ မောင်းနှင်ခါနီးတွင် ဒုတိယအကြိမ် ပြန်လည်စစ်ဆေးခြင်း (Admin ဖြစ်ပါက ကျော်မည်)
+        if user_id == ADMIN_ID:
+            is_safe = True
+        else:
+            is_safe, _ = is_code_safe(file_path)
+            
         if not is_safe:
             await query.edit_message_text("❌ စစ်ဆေးမှုအရ ဤကုဒ်သည် ဘေးကင်းမှုမရှိပါ။")
             return
@@ -261,7 +271,6 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         log_file = open(log_path, "w")
         
         try:
-            # Railway ပေါ်တွင် သာမန်အတိုင်း မောင်းနှင်ခြင်း (Container စနစ်ဖြစ်၍ အောက်ခံ Server ကို မထိခိုက်နိုင်ပါ)
             process = subprocess.Popen(["python3", file_path], stdout=log_file, stderr=log_file)
             running_processes[user_id][file_path] = {
                 "process": process,
@@ -485,7 +494,7 @@ def main():
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(CallbackQueryHandler(button_click))
 
-    print("🤖 Railway Deploy Engine Started 100% Fully Functional with Security Guard...")
+    print("🤖 KRAW Hosting Engine Started with Admin Bypass Guard...")
     app.run_polling()
 
 if __name__ == "__main__":
