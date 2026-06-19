@@ -8,7 +8,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 from telegram.error import TelegramError
 
 # --- Configuration ---
-BOT_TOKEN = "8840868848:AAE_-AZFJDe85lO2eL8zsX9kGn8UMG-wuAM"
+BOT_TOKEN = "8840868848:AAEecPl4AWnvhdWBzZip_ZXYYnxgSclQo2w"
 ADMIN_ID = 5536833682  # ⚠️ သင့်ရဲ့ Telegram User ID ကို ဒီနေရာမှာ အမှန်ပြင်ထည့်ပါ
 
 DB_FILE = "users_db.json"
