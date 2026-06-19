@@ -10,11 +10,12 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.error import TelegramError
 
-# --- Configuration ---
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8840868848:AAEecPl4AWnvhdWBzZip_ZXYYnxgSclQo2w")
+# --- Configuration (Railway Variables မှ စနစ်တကျ ဖတ်ပါမည်) ---
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "5536833682"))
 DB_FILE = "users_db.json"
 
+# --- 🛡️ SECURITY FILTER ---
 DANGEROUS_KEYWORDS = [
     r"os\.system", r"subprocess\.", r"pty\.", r"shutil\.", r"open\(.*w.*?\)", r"open\(.*a.*?\)",
     r"chpasswd", r"useradd", r"usermod", r"passwd", r"rm\s+-", r"chmod", r"chown",
@@ -64,8 +65,7 @@ def is_code_safe(file_path):
         return True, None
     except: return False, "Cannot read file"
 
-# --- 🛡️ THREAD BASED TIMING FOR PYTHON 3.13 COMPATIBILITY ---
-# ဒီအပိုင်းက Python 3.13 ရဲ့ loop architecture မှာ job_queue ကြောင့် Crash မဖြစ်အောင် ကာကွယ်ပေးပါတယ်
+# --- 🛡️ BACKGROUND THREAD TIMER (Job Queue အစားထိုး တည်ငြိမ်မှုပေးမည့်စနစ်) ---
 def start_background_timer(token):
     def loop_checker():
         bot_client = Bot(token=token)
@@ -73,7 +73,7 @@ def start_background_timer(token):
         asyncio.set_event_loop(loop)
         while True:
             try:
-                time.sleep(60)
+                time.sleep(60) # ၁ မိနစ်တစ်ကြိမ် စစ်ဆေးမည်
                 db = load_db()
                 now = time.time()
                 for user_id, files in list(running_processes.items()):
@@ -92,12 +92,12 @@ def start_background_timer(token):
                                 except: pass
                         user["free_used_today"] = 18000; save_db(db)
                         if user_id in running_processes: del running_processes[user_id]
-                        try: loop.run_until_complete(bot_client.send_message(chat_id=int(user_id), text="⚠️ ယနေ့အတွက် Free ၅ နာရီ သုံးစွဲမှု ပြည့်သွားပါပြီ။"))
+                        try: loop.run_until_complete(bot_client.send_message(chat_id=int(user_id), text="⚠️ ယနေ့အတွက် Free ၅ နာရီ သုံးစွဲမှု ပြည့်သွားသဖြင့် Script များကို စနစ်မှ ရပ်ဆိုင်းလိုက်ပါပြီ။"))
                         except: pass
             except: pass
     threading.Thread(target=loop_checker, daemon=True).start()
 
-# --- Handlers ---
+# --- Bot Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id; db = load_db(); user = check_user_status(user_id, db)
     role_text = str(user.get("role", "free")).upper()
@@ -129,7 +129,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     if not is_safe:
         if os.path.exists(full_path): os.remove(full_path)
-        await update.message.reply_text(f"❌ **လုံခြုံရေးအရ ငြင်းပယ်ခြင်း ခံရပါသည်!**\nခွင့်မပြုထားသော စကားလုံး (`{matched_pattern}`) ပါဝင်နေပါသည်။"); return
+        await update.message.reply_text(f"❌ **လုံခြုံရေးအရ ငြင်းပယ်ခြင်း ခံရပါသည်!**\nခွင့်မပြုထားသော Сode (`{matched_pattern}`) ပါဝင်နေပါသည်။"); return
         
     context.user_data['current_file'] = full_path
     keyboard = [[InlineKeyboardButton("▶️ စတင်ရန်", callback_data="run_script")], [InlineKeyboardButton("🗑️ ဖျက်ရန်", callback_data="delete_file")]]
@@ -172,16 +172,47 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if os.path.exists(file_path): os.remove(file_path)
         await query.edit_message_text("🗑️ ဖိုင်ကို ဖျက်သိမ်းပြီးပါပြီ။")
 
+# --- Stats Command (HTML Format ဖြင့် အမှားအယွင်းမရှိအောင် ပြင်ဆင်ထားပါသည်) ---
+async def admin_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        db = load_db()
+        total_users = len(db)
+        free_users = sum(1 for u in db.values() if u.get("role") == "free")
+        vip_users = sum(1 for u in db.values() if u.get("role") == "vip")
+        premium_users = sum(1 for u in db.values() if u.get("role") == "premium")
+        
+        active_processes_count = 0
+        for uid, files in running_processes.items():
+            active_processes_count += sum(1 for p in files.values() if p["process"].poll() is None)
+
+        text = "📊 <b>KRAW Server Global Statistics</b>\n"
+        text += "----------------------------------\n"
+        text += f"👥 Total Users DB: {total_users} ဦး\n"
+        text += f"🆓 FREE: {free_users} | 👑 VIP: {vip_users} | 🚀 PREMIUM: {premium_users}\n"
+        text += f"🔥 Total Active Running Scripts: {active_processes_count} ခု\n"
+        
+        await update.message.reply_text(text, parse_mode="HTML")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Stats Error: {str(e)}")
+
 def main():
-    # ApplicationBuilder ထဲက job_queue ကို လုံးဝဖြုတ်ထားလို့ Python 3.13 မှာလည်း Crash မဖြစ်ဘဲ တည်ငြိမ်စွာ Run နိုင်ပါတယ်
+    if not BOT_TOKEN:
+        print("❌ CRITICAL ERROR: BOT_TOKEN variable is missing in Railway Dashboard!")
+        return
+
     app = Application.builder().token(BOT_TOKEN).build()
     start_background_timer(BOT_TOKEN)
     
     app.add_handler(CommandHandler("start", start))
+    
+    # /status နှင့် /stats နှစ်မျိုးလုံးကို အလုပ်လုပ်ရန် ချိတ်ဆက်ထားသည်
+    app.add_handler(CommandHandler("status", admin_status))
+    app.add_handler(CommandHandler("stats", admin_status))
+    
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(CallbackQueryHandler(button_click))
     
-    print("🤖 KRAW Hosting Engine Active 100% perfectly on Railway Server...")
+    print("🤖 KRAW Hosting Engine Active perfectly on Railway Server...")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
