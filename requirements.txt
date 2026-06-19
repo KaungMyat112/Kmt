@@ -2,3 +2,4 @@ python-telegram-bot[job-queue]
 pyrogram
 tgcrypto
 yt-dlp
+python-telegram-bot==21.1.1

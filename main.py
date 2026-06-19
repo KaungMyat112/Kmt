@@ -2,16 +2,25 @@ import os
 import json
 import time
 import subprocess
+import re
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.error import TelegramError
 
-# --- Configuration ---
-BOT_TOKEN = "8840868848:AAEecPl4AWnvhdWBzZip_ZXYYnxgSclQo2w"
-ADMIN_ID = 5536833682  # ⚠️ သင့်ရဲ့ Telegram User ID ကို ဒီနေရာမှာ အမှန်ပြင်ထည့်ပါ
+# --- Configuration (Railway Variables မှ ဖတ်ပါမည်) ---
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "5536833682"))
 
 DB_FILE = "users_db.json"
+
+# --- 🛡️ SECURITY FILTER FOR RAILWAY ---
+# ဟက်ကာများမှ စနစ်အား ဖျက်ဆီးရန် ကြိုးပမ်းနိုင်သည့် စကားလုံးများအား ကြိုတင်ပိတ်ဆို့ရန်
+DANGEROUS_KEYWORDS = [
+    r"os\.system", r"subprocess\.", r"pty\.", r"shutil\.", r"open\(.*w.*?\)", r"open\(.*a.*?\)",
+    r"chpasswd", r"useradd", r"usermod", r"passwd", r"rm\s+-", r"chmod", r"chown",
+    r"socket", r"requests", r"urllib", r"builtins", r"eval\(", r"exec\(", r"__import__"
+]
 
 # running_processes = { user_id: { file_path: { "process": process_object, "start_time": time_stamp } } }
 running_processes = {}
@@ -67,6 +76,20 @@ def get_max_allowed_files(role):
     if role == "premium": return 10
     if role == "vip": return 5
     return 1
+
+# --- 🛡️ CODE SECURITY CHECK FUNCTION ---
+def is_code_safe(file_path):
+    """ ဖိုင်တွင်းရှိ ကုဒ်များကို ဖတ်ပြီး အန္တရာယ်ရှိသော စာသားများ ပါဝင်မှု ရှိမရှိ စစ်ဆေးခြင်း """
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+            
+        for pattern in DANGEROUS_KEYWORDS:
+            if re.search(pattern, content, re.IGNORECASE):
+                return False, pattern
+        return True, None
+    except Exception as e:
+        return False, str(e)
 
 # --- Background Job (၅ နာရီပြည့်ကွက်တိ ပိတ်ချမည့်စနစ်) ---
 async def auto_stop_free_users(context: ContextTypes.DEFAULT_TYPE):
@@ -180,7 +203,15 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file = await context.bot.get_file(document.file_id)
     await file.download_to_drive(file_name)
     
-    context.user_data['current_file'] = os.path.abspath(file_name)
+    # 🛡️ ဖိုင်ဒေါင်းလုပ်လုပ်ပြီးသည်နှင့် အန္တရာယ်ရှိမရှိ ချက်ချင်းစစ်ဆေးခြင်း
+    full_path = os.path.abspath(file_name)
+    is_safe, matched_pattern = is_code_safe(full_path)
+    if not is_safe:
+        os.remove(full_path) # အန္တရာယ်ရှိဖိုင်အား ချက်ချင်းဖျက်ပစ်ခြင်း
+        await update.message.reply_text(f"❌ **လုံခြုံရေးအရ ငြင်းပယ်ခြင်း ခံရပါသည်!**\nသင့်ကုဒ်ထဲတွင် ခွင့်မပြုထားသော စနစ်သုံးစကားလုံး (`{matched_pattern}`) ပါဝင်နေသဖြင့် စနစ်မှ အလိုအလျောက် ပယ်ဖျက်လိုက်ပါသည်။")
+        return
+        
+    context.user_data['current_file'] = full_path
 
     keyboard = [[InlineKeyboardButton("▶️ စတင်ရန်", callback_data="run_script")], [InlineKeyboardButton("🗑️ ဖျက်ရန်", callback_data="delete_file")]]
     await update.message.reply_text(text=f"📄 ဖိုင်အမည်: `{document.file_name}`\n🔴 ရပ်နားထားသည်", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -220,10 +251,17 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(f"⚠️ သင့်အဆင့်၏ အများဆုံး Run ခွင့်ပြုချက် ({max_allowed} ဖိုင်) ပြည့်သွားပါပြီ။")
             return
 
+        # 🛡️ မောင်းနှင်ခါနီးတွင် ဒုတိယအကြိမ် စိတ်ချရအောင် ပြန်စစ်ဆေးခြင်း
+        is_safe, _ = is_code_safe(file_path)
+        if not is_safe:
+            await query.edit_message_text("❌ စစ်ဆေးမှုအရ ဤကုဒ်သည် ဘေးကင်းမှုမရှိပါ။")
+            return
+
         log_path = f"{file_path}.log"
         log_file = open(log_path, "w")
         
         try:
+            # Railway ပေါ်တွင် သာမန်အတိုင်း မောင်းနှင်ခြင်း (Container စနစ်ဖြစ်၍ အောက်ခံ Server ကို မထိခိုက်နိုင်ပါ)
             process = subprocess.Popen(["python3", file_path], stdout=log_file, stderr=log_file)
             running_processes[user_id][file_path] = {
                 "process": process,
@@ -313,7 +351,6 @@ async def admin_add_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=int(target_id), text="🎉 သင့်အကောင့်အား PREMIUM အဆင့်သို့ မြှင့်တင်ပေးလိုက်ပါပြီ။ (ပြိုင်တူ ၁၀ ဖိုင်)")
     except: await update.message.reply_text("❌ အသုံးပြုပုံ: `/addPremium <user_id> <7d/15d/30d>`")
 
-# --- [🛠️ ADMIN STATUS BUG FIXES] ---
 async def admin_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
     
@@ -342,7 +379,6 @@ async def admin_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for uid_str, files in list(running_processes.items()):
         uid_int = int(uid_str)
         
-        # Admin ဖြစ်ခဲ့လျှင် Default Role သတ်မှတ်ပေးရန် (Bug Fixed)
         if uid_int == ADMIN_ID:
             user_info = {"role": "admin", "expire_at": 0, "free_used_today": 0}
         else:
@@ -449,7 +485,7 @@ def main():
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(CallbackQueryHandler(button_click))
 
-    print("🤖 OVps Engine Started 100% Fully Functional...")
+    print("🤖 Railway Deploy Engine Started 100% Fully Functional with Security Guard...")
     app.run_polling()
 
 if __name__ == "__main__":
