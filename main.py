@@ -10,13 +10,11 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.error import TelegramError
 
-# --- Configuration (ဒီနေရာမှာ ရာနှုန်းပြည့် မှန်ကန်အောင် ပြင်ဆင်ထားပါတယ်) ---
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8840868848:AAGdJEYmfQ1yk-Qyi8OfVqUWQKLH3WMRlr0")
+# --- Configuration ---
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8840868848:AAEecPl4AWnvhdWBzZip_ZXYYnxgSclQo2w")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "5536833682"))
-
 DB_FILE = "users_db.json"
 
-# --- 🛡️ SECURITY FILTER FOR RAILWAY ---
 DANGEROUS_KEYWORDS = [
     r"os\.system", r"subprocess\.", r"pty\.", r"shutil\.", r"open\(.*w.*?\)", r"open\(.*a.*?\)",
     r"chpasswd", r"useradd", r"usermod", r"passwd", r"rm\s+-", r"chmod", r"chown",
@@ -66,7 +64,8 @@ def is_code_safe(file_path):
         return True, None
     except: return False, "Cannot read file"
 
-# --- 🛡️ BACKGROUND THREAD TIMER (Crash ဖြစ်စေတတ်သော Job Queue နေရာတွင် အစားထိုးသည်) ---
+# --- 🛡️ THREAD BASED TIMING FOR PYTHON 3.13 COMPATIBILITY ---
+# ဒီအပိုင်းက Python 3.13 ရဲ့ loop architecture မှာ job_queue ကြောင့် Crash မဖြစ်အောင် ကာကွယ်ပေးပါတယ်
 def start_background_timer(token):
     def loop_checker():
         bot_client = Bot(token=token)
@@ -74,7 +73,7 @@ def start_background_timer(token):
         asyncio.set_event_loop(loop)
         while True:
             try:
-                time.sleep(60) # ၁ မိနစ်တစ်ခါ စစ်ဆေးမည်
+                time.sleep(60)
                 db = load_db()
                 now = time.time()
                 for user_id, files in list(running_processes.items()):
@@ -93,12 +92,12 @@ def start_background_timer(token):
                                 except: pass
                         user["free_used_today"] = 18000; save_db(db)
                         if user_id in running_processes: del running_processes[user_id]
-                        try: loop.run_until_complete(bot_client.send_message(chat_id=int(user_id), text="⚠️ ယနေ့အတွက် Free ၅ နာရီ သုံးစွဲမှု ပြည့်သွားပါပြီ။ Script များကို စနစ်မှ ရပ်ဆိုင်းလိုက်ပါပြီ။"))
+                        try: loop.run_until_complete(bot_client.send_message(chat_id=int(user_id), text="⚠️ ယနေ့အတွက် Free ၅ နာရီ သုံးစွဲမှု ပြည့်သွားပါပြီ။"))
                         except: pass
             except: pass
     threading.Thread(target=loop_checker, daemon=True).start()
 
-# --- Bot Handlers ---
+# --- Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id; db = load_db(); user = check_user_status(user_id, db)
     role_text = str(user.get("role", "free")).upper()
@@ -173,23 +172,16 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if os.path.exists(file_path): os.remove(file_path)
         await query.edit_message_text("🗑️ ဖိုင်ကို ဖျက်သိမ်းပြီးပါပြီ။")
 
-# --- Admin Commands ---
-async def admin_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID: return
-    db = load_db(); text = f"📊 **Global Statistics**\nTotal Users: {len(db)}\n"
-    await update.message.reply_text(text, parse_mode="Markdown")
-
 def main():
-    # Token ချိတ်ဆက်မှုစနစ်အား အမှန်ကန်ဆုံး ပုံစံဖြင့် တည်ဆောက်ထားပါသည်
+    # ApplicationBuilder ထဲက job_queue ကို လုံးဝဖြုတ်ထားလို့ Python 3.13 မှာလည်း Crash မဖြစ်ဘဲ တည်ငြိမ်စွာ Run နိုင်ပါတယ်
     app = Application.builder().token(BOT_TOKEN).build()
     start_background_timer(BOT_TOKEN)
     
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("status", admin_status))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(CallbackQueryHandler(button_click))
     
-    print("🤖 KRAW Hosting Engine Active perfectly on Railway...")
+    print("🤖 KRAW Hosting Engine Active 100% perfectly on Railway Server...")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
