@@ -15,11 +15,11 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "5536833682"))
 DB_FILE = "users_db.json"
 
-# --- 🛡️ SECURITY FILTER ---
+# --- 🛡️ SECURITY FILTER (တိကျသော စာသားများဖြင့် ပြောင်းလဲထားသည်) ---
 CRITICAL_DANGEROUS = [
-    r"os\.system", r"pty\.", r"shutil\.", r"chpasswd", r"useradd", 
-    r"usermod", r"passwd", r"rm\s+-", r"chmod", r"chown", 
-    r"builtins", r"eval\(", r"exec\(", r"__import__"
+    "os.system(", "pty.spawn", "shutil.rmtree", "chpasswd", "useradd", 
+    "usermod", "passwd", "rm -", "chmod ", "chown ", 
+    "builtins", "eval(", "exec(", "__import__"
 ]
 
 running_processes = {}
@@ -68,41 +68,38 @@ def is_code_safe(file_path):
     try:
         with open(file_path, "r", encoding="utf-8", errors="ignore") as f: 
             content = f.read()
-            
-        # 🛡️ အဆင့် (၁) - အန္တရာယ်အရှိဆုံး Command များကို အရင်စစ်ထုတ်ခြင်း
-        # (သို့သော် Autoshare အတွက် သုံးထားတဲ့ subprocess.check_call ကို ခြွင်းချက်အနေနဲ့ ခွင့်ပြုပေးမည်)
-        for pattern in CRITICAL_DANGEROUS:
-            if pattern == r"subprocess\." and "subprocess.check_call" in content:
-                continue
-            if re.search(pattern, content, re.IGNORECASE): 
-                return False, f"Critical Risk: {pattern}"
 
-        # 🛡️ အဆင့် (၂) - Autoshare စနစ် သီးသန့်စစ်ဆေးချက်
-        # (SESSION_STRING သို့မဟုတ် အောက်က Menu စာသား ပါဝင်မှုကို စမတ်ကျကျ စစ်ဆေးခြင်း)
+        # 🛡️ အဆင့် (၁) - Autoshare စနစ် သီးသန့်စစ်ဆေးချက် (ပထမဆုံး ဦးစားပေးစစ်မည်)
+        # အကယ်၍ Autoshare ကုဒ် ဖြစ်နေခဲ့လျှင်
         if "StringSession" in content or "Premium Autoshare Userbot Help Menu" in content:
             
-            # Autoshare ထဲမှာ ညှပ်ထည့်လေ့ရှိတဲ့ တကယ့် Hacker ကုဒ်များကိုသာ တိတိကျကျ စစ်ထုတ်ခြင်း
+            # Autoshare ထဲမှာ Hacker တွေ အသုံးများတဲ့ တကယ့် အန္တရာယ်ရှိကုဒ်များကိုသာ တိတိကျကျ စစ်ထုတ်ခြင်း
             AUTOSHARE_STRICT_FILTERS = [
-                r"open\(.*?[wa].*?\)",           # ဖိုင်ကို ဖျက်/ပြင်မည့်ကုဒ်
-                r"socket",                        # ပြင်ပကို လှမ်းချိတ်မည့်ကုဒ်
-                r"os\.system\("                   # စနစ်တစ်ခုလုံးကို ဖျက်ဆီးမည့်ကုဒ်
+                "open(",            # ဖိုင်ကို ဝင်ရောက်ပြင်ဆင်ခြင်း ပိတ်ရန်
+                "socket",           # ပြင်ပ IP သို့ ဆက်သွယ်ခြင်း ပိတ်ရန်
+                "os.system",        # စနစ်ဖျက်ဆီးမည့် Command များ ပိတ်ရန်
+                "shutil."           # ဖိုင်တွဲများ လှမ်းဖျက်ခြင်း ပိတ်ရန်
             ]
             for pattern in AUTOSHARE_STRICT_FILTERS:
-                if re.search(pattern, content, re.IGNORECASE):
+                if pattern in content:
                     return False, f"Malicious Injection in Autoshare: {pattern}"
+            
+            # ပြဿနာမရှိရင် အဆင့် (၁) ကနေတင် တိုက်ရိုက် ခွင့်ပြုချက် (Bypass) ပေးလိုက်မည်
             return True, None
 
-        # 🛡️ အဆင့် (၃) - သာမန် User ကုဒ်များအတွက် Standard Filter
+        # 🛡️ အဆင့် (၂) - သာမန် User ကုဒ်များအတွက် Critical Filter စစ်ဆေးခြင်း
+        for pattern in CRITICAL_DANGEROUS:
+            if pattern in content:
+                return False, f"Critical Risk: {pattern}"
+
+        # 🛡️ အဆင့် (၃) - သာမန် User ကုဒ်များအတွက် Standard Filter စစ်ဆေးခြင်း
         STANDARD_FILTERS = [
-            r"os\.system", r"subprocess\.", r"pty\.", r"shutil\.", r"open\(.*w.*?\)", r"open\(.*a.*?\)",
-            r"chpasswd", r"useradd", r"usermod", r"passwd", r"rm\s+-", r"chmod", r"chown",
-            r"socket", r"requests", r"urllib", r"builtins", r"eval\(", r"exec\(", r"__import__"
+            "os.system", "subprocess.", "pty.", "shutil.", 
+            "chpasswd", "useradd", "usermod", "passwd", "rm -", "chmod", "chown",
+            "socket", "requests", "urllib", "builtins", "eval(", "exec(", "__import__"
         ]
         for pattern in STANDARD_FILTERS:
-            # ဤနေရာတွင်လည်း check_call ကို ခြွင်းချက်အနေနဲ့ ခွင့်ပြုပေးမည်
-            if pattern == r"subprocess\." and "subprocess.check_call" in content:
-                continue
-            if re.search(pattern, content, re.IGNORECASE): 
+            if pattern in content: 
                 return False, pattern
                 
         return True, None
