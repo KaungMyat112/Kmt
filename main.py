@@ -63,32 +63,45 @@ def get_max_allowed_files(role):
     if role == "vip": return 5
     return 1
 
+# --- 🛡️ SMART CODE SAFETY CHECKER ---
 def is_code_safe(file_path):
     try:
         with open(file_path, "r", encoding="utf-8", errors="ignore") as f: 
             content = f.read()
             
+        # 🛡️ အဆင့် (၁) - အန္တရာယ်အရှိဆုံး Command များကို အရင်စစ်ထုတ်ခြင်း
+        # (သို့သော် Autoshare အတွက် သုံးထားတဲ့ subprocess.check_call ကို ခြွင်းချက်အနေနဲ့ ခွင့်ပြုပေးမည်)
         for pattern in CRITICAL_DANGEROUS:
+            if pattern == r"subprocess\." and "subprocess.check_call" in content:
+                continue
             if re.search(pattern, content, re.IGNORECASE): 
                 return False, f"Critical Risk: {pattern}"
 
-        if "Premium Autoshare Userbot Help Menu" in content and "StringSession" in content:
+        # 🛡️ အဆင့် (၂) - Autoshare စနစ် သီးသန့်စစ်ဆေးချက်
+        # (SESSION_STRING သို့မဟုတ် အောက်က Menu စာသား ပါဝင်မှုကို စမတ်ကျကျ စစ်ဆေးခြင်း)
+        if "StringSession" in content or "Premium Autoshare Userbot Help Menu" in content:
+            
+            # Autoshare ထဲမှာ ညှပ်ထည့်လေ့ရှိတဲ့ တကယ့် Hacker ကုဒ်များကိုသာ တိတိကျကျ စစ်ထုတ်ခြင်း
             AUTOSHARE_STRICT_FILTERS = [
-                r"open\(.*?[wa].*?\)",  
-                r"socket",              
-                r"subprocess\.(?!check_call)" 
+                r"open\(.*?[wa].*?\)",           # ဖိုင်ကို ဖျက်/ပြင်မည့်ကုဒ်
+                r"socket",                        # ပြင်ပကို လှမ်းချိတ်မည့်ကုဒ်
+                r"os\.system\("                   # စနစ်တစ်ခုလုံးကို ဖျက်ဆီးမည့်ကုဒ်
             ]
             for pattern in AUTOSHARE_STRICT_FILTERS:
                 if re.search(pattern, content, re.IGNORECASE):
                     return False, f"Malicious Injection in Autoshare: {pattern}"
             return True, None
 
+        # 🛡️ အဆင့် (၃) - သာမန် User ကုဒ်များအတွက် Standard Filter
         STANDARD_FILTERS = [
             r"os\.system", r"subprocess\.", r"pty\.", r"shutil\.", r"open\(.*w.*?\)", r"open\(.*a.*?\)",
             r"chpasswd", r"useradd", r"usermod", r"passwd", r"rm\s+-", r"chmod", r"chown",
             r"socket", r"requests", r"urllib", r"builtins", r"eval\(", r"exec\(", r"__import__"
         ]
         for pattern in STANDARD_FILTERS:
+            # ဤနေရာတွင်လည်း check_call ကို ခြွင်းချက်အနေနဲ့ ခွင့်ပြုပေးမည်
+            if pattern == r"subprocess\." and "subprocess.check_call" in content:
+                continue
             if re.search(pattern, content, re.IGNORECASE): 
                 return False, pattern
                 
@@ -310,13 +323,13 @@ async def kill_process(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- 👑 ADMIN MANAGEMENT COMMANDS ---
 
-# 🔓 UNBAN COMMAND (အသုံးပြုပုံ- /unban [User_ID])
+# 🔓 UNBAN COMMAND
 async def unban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ သင်သည် Admin မဟုတ်သဖြင့် ဤ Command ကို အသုံးပြုခွင့်မရှိပါ။")
         return
     if not context.args:
-        await update.message.reply_text("❌ အသုံးပြုပုံစံ မှားယွင်းနေပါသည်။\n✍️ ပုံစံ: `/unban [User_ID]`\n💡 ဥပမာ: `/unban 12345678`", parse_mode="Markdown")
+        await update.message.reply_text("❌ အသုံးပြုပုံစံ မှားယွင်းနေပါသည်။\n✍️ ပုံစံ: `/unban [User_ID]`", parse_mode="Markdown")
         return
     try:
         target_uid = str(context.args[0])
@@ -330,9 +343,9 @@ async def unban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db[target_uid]["warnings"] = 0 
         save_db(db)
         
-        await update.message.reply_text(f"✅ User ID: `{target_uid}` အား Ban စာရင်းမှ ဖယ်ရှားပြီး (Unban) အောင်မြင်စွာ ခွင့်ပြုပေးလိုက်ပါပြီ။", parse_mode="Markdown")
+        await update.message.reply_text(f"✅ User ID: `{target_uid}` အား Ban စာရင်းမှ ဖယ်ရှားပြီး အောင်မြင်စွာ ခွင့်ပြုပေးလိုက်ပါပြီ။", parse_mode="Markdown")
         try:
-            await context.bot.send_message(chat_id=int(target_uid), text="🎉 သတင်းကောင်းဗျာ! အသုံးပြုသူ၏ အကောင့်အား Admin မှ Ban စာရင်းမှ ပြန်လည်ဖယ်ရှားပေးလိုက်ပြီ ဖြစ်သဖြင့် Bot ကို ယခင်အတိုင်း ပုံမှန်ပြန်လည်အသုံးပြုနိုင်ပါပြီ။")
+            await context.bot.send_message(chat_id=int(target_uid), text="🎉 သတင်းကောင်းဗျာ! အသုံးပြုသူ၏ အကောင့်အား Admin မှ Ban စာရင်းမှ ပြန်လည်ဖယ်ရှားပေးလိုက်ပြီ ဖြစ်သဖြင့် Bot ကို ပုံမှန်ပြန်လည်အသုံးပြုနိုင်ပါပြီ။")
         except: pass
     except Exception as e: await update.message.reply_text(f"❌ Unban Error: {str(e)}")
 
