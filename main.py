@@ -15,7 +15,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "5536833682"))
 DB_FILE = "users_db.json"
 
-# --- 🛡️ SECURITY FILTER (တိကျသော စာသားများဖြင့် ပြောင်းလဲထားသည်) ---
+# --- 🛡️ SECURITY FILTER ---
 CRITICAL_DANGEROUS = [
     "os.system(", "pty.spawn", "shutil.rmtree", "chpasswd", "useradd", 
     "usermod", "passwd", "rm -", "chmod ", "chown ", 
@@ -73,12 +73,12 @@ def is_code_safe(file_path):
         # အကယ်၍ Autoshare ကုဒ် ဖြစ်နေခဲ့လျှင်
         if "StringSession" in content or "Premium Autoshare Userbot Help Menu" in content:
             
-            # Autoshare ထဲမှာ Hacker တွေ အသုံးများတဲ့ တကယ့် အန္တရာယ်ရှိကုဒ်များကိုသာ တိတိကျကျ စစ်ထုတ်ခြင်း
+            # Autoshare ထဲမှာ ညှပ်ထည့်လေ့ရှိတဲ့ တကယ့် Hacker ကုဒ်များကိုသာ တိတိကျကျ စစ်ထုတ်ခြင်း
+            # (Autoshare ၏ ပုံမှန် ဖတ်/ရေး ပြုလုပ်သော open() လုပ်ဆောင်ချက်များကို ခွင့်ပြုပေးထားသည်)
             AUTOSHARE_STRICT_FILTERS = [
-                "open(",            # ဖိုင်ကို ဝင်ရောက်ပြင်ဆင်ခြင်း ပိတ်ရန်
-                "socket",           # ပြင်ပ IP သို့ ဆက်သွယ်ခြင်း ပိတ်ရန်
                 "os.system",        # စနစ်ဖျက်ဆီးမည့် Command များ ပိတ်ရန်
-                "shutil."           # ဖိုင်တွဲများ လှမ်းဖျက်ခြင်း ပိတ်ရန်
+                "pty.spawn",        # Terminal လှမ်းယူမည့်ကုဒ် ပိတ်ရန်
+                "shutil.rmtree"     # Folder တစ်ခုလုံး လှမ်းဖျက်မည့်ကုဒ် ပိတ်ရန်
             ]
             for pattern in AUTOSHARE_STRICT_FILTERS:
                 if pattern in content:
@@ -88,7 +88,10 @@ def is_code_safe(file_path):
             return True, None
 
         # 🛡️ အဆင့် (၂) - သာမန် User ကုဒ်များအတွက် Critical Filter စစ်ဆေးခြင်း
+        # (ဤနေရာတွင် သာမန် User များအတွက် subprocess.check_call ပါဝင်ပါက ခြွင်းချက်အနေဖြင့် ခွင့်ပြုပေးမည်)
         for pattern in CRITICAL_DANGEROUS:
+            if pattern == "subprocess." and "subprocess.check_call" in content:
+                continue
             if pattern in content:
                 return False, f"Critical Risk: {pattern}"
 
@@ -99,6 +102,8 @@ def is_code_safe(file_path):
             "socket", "requests", "urllib", "builtins", "eval(", "exec(", "__import__"
         ]
         for pattern in STANDARD_FILTERS:
+            if pattern == "subprocess." and "subprocess.check_call" in content:
+                continue
             if pattern in content: 
                 return False, pattern
                 
