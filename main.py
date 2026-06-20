@@ -16,13 +16,12 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "5536833682"))
 DB_FILE = "users_db.json"
 
 # --- 🛡️ SECURITY FILTER ---
-DANGEROUS_KEYWORDS = [
-    r"os\.system", r"subprocess\.", r"pty\.", r"shutil\.", r"open\(.*w.*?\)", r"open\(.*a.*?\)",
-    r"chpasswd", r"useradd", r"usermod", r"passwd", r"rm\s+-", r"chmod", r"chown",
-    r"socket", r"requests", r"urllib", r"builtins", r"eval\(", r"exec\(", r"__import__"
+CRITICAL_DANGEROUS = [
+    r"os\.system", r"pty\.", r"shutil\.", r"chpasswd", r"useradd", 
+    r"usermod", r"passwd", r"rm\s+-", r"chmod", r"chown", 
+    r"builtins", r"eval\(", r"exec\(", r"__import__"
 ]
 
-# running_processes[user_id][file_path] = {"process": p, "start_time": t, "pid": pid, "display_name": name}
 running_processes = {}
 
 # --- Database Functions ---
@@ -66,11 +65,36 @@ def get_max_allowed_files(role):
 
 def is_code_safe(file_path):
     try:
-        with open(file_path, "r", encoding="utf-8", errors="ignore") as f: content = f.read()
-        for pattern in DANGEROUS_KEYWORDS:
-            if re.search(pattern, content, re.IGNORECASE): return False, pattern
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f: 
+            content = f.read()
+            
+        for pattern in CRITICAL_DANGEROUS:
+            if re.search(pattern, content, re.IGNORECASE): 
+                return False, f"Critical Risk: {pattern}"
+
+        if "Premium Autoshare Userbot Help Menu" in content and "StringSession" in content:
+            AUTOSHARE_STRICT_FILTERS = [
+                r"open\(.*?[wa].*?\)",  
+                r"socket",              
+                r"subprocess\.(?!check_call)" 
+            ]
+            for pattern in AUTOSHARE_STRICT_FILTERS:
+                if re.search(pattern, content, re.IGNORECASE):
+                    return False, f"Malicious Injection in Autoshare: {pattern}"
+            return True, None
+
+        STANDARD_FILTERS = [
+            r"os\.system", r"subprocess\.", r"pty\.", r"shutil\.", r"open\(.*w.*?\)", r"open\(.*a.*?\)",
+            r"chpasswd", r"useradd", r"usermod", r"passwd", r"rm\s+-", r"chmod", r"chown",
+            r"socket", r"requests", r"urllib", r"builtins", r"eval\(", r"exec\(", r"__import__"
+        ]
+        for pattern in STANDARD_FILTERS:
+            if re.search(pattern, content, re.IGNORECASE): 
+                return False, pattern
+                
         return True, None
-    except: return False, "Cannot read file"
+    except: 
+        return False, "Cannot read file"
 
 # --- 🛡️ BACKGROUND THREAD TIMER ---
 def start_background_timer(token):
@@ -85,14 +109,8 @@ def start_background_timer(token):
                 now = time.time()
                 for user_id, files in list(running_processes.items()):
                     uid = str(user_id)
-                    
-                    # ⚠️ ပြင်ဆင်ချက်- Admin ဖြစ်ခဲ့ရင် Timer စစ်ဆေးမှုကနေ လုံးဝကျော်သွားစေရန် ပထမဆုံး စစ်ထုတ်ချက်ထားပါတယ်
-                    if int(user_id) == ADMIN_ID:
-                        continue
-                    
-                    # VIP သို့မဟုတ် Premium ဖြစ်နေရင်လည်း ၅ နာရီ Limit နဲ့ မဖြတ်ရန်
-                    if uid in db and db[uid].get("role") in ["vip", "premium", "admin"]: 
-                        continue
+                    if int(user_id) == ADMIN_ID: continue
+                    if uid in db and db[uid].get("role") in ["vip", "premium", "admin"]: continue
                         
                     user = db.setdefault(uid, {"role": "free", "expire_at": 0, "free_used_today": 0, "last_free_reset": now})
                     already_used = user.get("free_used_today", 0)
@@ -147,10 +165,8 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file = await context.bot.get_file(document.file_id); await file.download_to_drive(file_name)
     full_path = os.path.abspath(file_name)
     
-    if user_id == ADMIN_ID: 
-        is_safe, matched_pattern = True, None
-    else: 
-        is_safe, matched_pattern = is_code_safe(full_path)
+    if user_id == ADMIN_ID: is_safe, matched_pattern = True, None
+    else: is_safe, matched_pattern = is_code_safe(full_path)
         
     if not is_safe:
         if os.path.exists(full_path): os.remove(full_path)
@@ -214,8 +230,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif action == "stop":
         if user_id in running_processes and file_path in running_processes[user_id]:
             p_info = running_processes[user_id][file_path]
-            try:
-                p_info["process"].terminate(); p_info["process"].wait()
+            try: p_info["process"].terminate(); p_info["process"].wait()
             except: pass
             if user.get("role") == "free": user["free_used_today"] += (time.time() - p_info["start_time"]); save_db(db)
             del running_processes[user_id][file_path]
@@ -240,14 +255,10 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- 📋 STATUS & MONITORING SYSTEM ---
 async def admin_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        user_id = update.effective_user.id
-        db = load_db()
-        user = check_user_status(user_id, db)
+        user_id = update.effective_user.id; db = load_db(); user = check_user_status(user_id, db)
         if user.get("banned"): return
 
-        total_users = len(db)
-        active_scripts_text = ""
-        global_active_count = 0
+        total_users = len(db); active_scripts_text = ""; global_active_count = 0
         
         for uid, files in running_processes.items():
             for fpath, p_info in list(files.items()):
@@ -256,31 +267,24 @@ async def admin_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if user_id == ADMIN_ID or int(uid) == user_id:
                         active_scripts_text += f"🔹 <b>{p_info['display_name']}</b> (PID: <code>{p_info['pid']}</code>) - Owner ID: {uid}\n"
 
-        text = "📊 <b>KRAW Server Global Statistics</b>\n"
-        text += "----------------------------------\n"
-        if user_id == ADMIN_ID:
-            text += f"👥 Total Registered Users: {total_users} ဦး\n"
+        text = "📊 <b>KRAW Server Global Statistics</b>\n----------------------------------\n"
+        if user_id == ADMIN_ID: text += f"👥 Total Registered Users: {total_users} ဦး\n"
         text += f"🔥 Total Running Scripts on Server: {global_active_count} ခု\n\n"
-        
         text += "📝 <b>သင့်ထံတွင် လည်ပတ်နေသော Active Scripts များ:</b>\n" if user_id != ADMIN_ID else "📝 <b>Server တစ်ခုလုံးတွင် လည်ပတ်နေသော Active Scripts များ:</b>\n"
         text += active_scripts_text if active_scripts_text != "" else "❌ လက်ရှိ မည်သည့် Script မျှ လည်ပတ်ခြင်းမရှိပါ။\n"
         
         if global_active_count > 0:
-            text += "\n💡 <i>Script ကို အတင်းရပ်လိုပါက <code>/kill [PID]</code> ဟု ရိုက်ပို့ပါ။ (ဥပမာ- /kill 14)</i>"
-            
+            text += "\n💡 <i>Script ကို အတင်းရပ်လိုပါက <code>/kill [PID]</code> ဟု ရိုက်ပို့ပါ။</i>"
         await update.message.reply_text(text, parse_mode="HTML")
-    except Exception as e:
-        await update.message.reply_text(f"❌ Stats Error: {str(e)}")
+    except Exception as e: await update.message.reply_text(f"❌ Stats Error: {str(e)}")
 
 # --- ☠️ KILL COMMAND ---
 async def kill_process(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        user_id = update.effective_user.id
-        db = load_db(); user = check_user_status(user_id, db)
+        user_id = update.effective_user.id; db = load_db(); user = check_user_status(user_id, db)
         if user.get("banned"): return
-
         if not context.args:
-            await update.message.reply_text("❌ ကျေးဇူးပြု၍ ရပ်လိုသော PID ထည့်ပေးပါ။\nဥပမာ - <code>/kill 14</code>", parse_mode="HTML"); return
+            await update.message.reply_text("❌ ကျေးဇူးပြု၍ ရပ်လိုသော PID ထည့်ပေးပါ။", parse_mode="HTML"); return
             
         try: target_pid = int(context.args[0])
         except: await update.message.reply_text("❌ PID သည် ကိန်းဂဏန်းအမှန် ဖြစ်ရပါမည်။"); return
@@ -290,99 +294,73 @@ async def kill_process(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for fpath, p_info in list(files.items()):
                 if p_info["pid"] == target_pid:
                     if user_id == ADMIN_ID or int(uid) == user_id:
-                        try:
-                            p_info["process"].terminate()
-                            p_info["process"].wait()
+                        try: p_info["process"].terminate(); p_info["process"].wait()
                         except: pass
-                        
                         if db.get(str(uid), {}).get("role") == "free":
                             db[str(uid)]["free_used_today"] += (time.time() - p_info["start_time"])
                             save_db(db)
-                            
-                        del running_processes[uid][fpath]
-                        found = True
-                        await update.message.reply_text(f"✅ PID: <code>{target_pid}</code> ({p_info['display_name']}) ကို အောင်မြင်စွာ ရပ်ဆိုင်းလိုက်ပါပြီ။", parse_mode="HTML")
+                        del running_processes[uid][fpath]; found = True
+                        await update.message.reply_text(f"✅ PID: <code>{target_pid}</code> ကို အောင်မြင်စွာ ရပ်ဆိုင်းလိုက်ပါပြီ။", parse_mode="HTML")
                         break
                     else:
-                        await update.message.reply_text("❌ ဤ Script ကို ရပ်ပစ်ရန် Thint တွင် ခွင့်ပြုချက်မရှိပါ။"); return
+                        await update.message.reply_text("❌ ဤ Script ကို ရပ်ပစ်ရန် ခွင့်ပြုချက်မရှိပါ။"); return
             if found: break
+        if not found: await update.message.reply_text(f"❌ သတ်မှတ်ထားသော PID: {target_pid} အား မတွေ့ရပါ။")
+    except Exception as e: await update.message.reply_text(f"❌ Kill Error: {str(e)}")
+
+# --- 👑 ADMIN MANAGEMENT COMMANDS ---
+
+# 🔓 UNBAN COMMAND (အသုံးပြုပုံ- /unban [User_ID])
+async def unban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ သင်သည် Admin မဟုတ်သဖြင့် ဤ Command ကို အသုံးပြုခွင့်မရှိပါ။")
+        return
+    if not context.args:
+        await update.message.reply_text("❌ အသုံးပြုပုံစံ မှားယွင်းနေပါသည်။\n✍️ ပုံစံ: `/unban [User_ID]`\n💡 ဥပမာ: `/unban 12345678`", parse_mode="Markdown")
+        return
+    try:
+        target_uid = str(context.args[0])
+        db = load_db()
+        
+        if target_uid not in db:
+            await update.message.reply_text("❌ ယခု ID သည် Database စာရင်းထဲတွင် မရှိသေးပါဗျာ။")
+            return
             
-        if not found:
-            await update.message.reply_text(f"❌ သတ်မှတ်ထားသော PID: {target_pid} အား Active စာရင်းထဲတွင် မတွေ့ရပါ။")
-    except Exception as e:
-        await update.message.reply_text(f"❌ Kill Error: {str(e)}")
+        db[target_uid]["banned"] = False
+        db[target_uid]["warnings"] = 0 # သတိပေးချက်အရေအတွက်ကိုပါ အစကပြန်စပေးခြင်း
+        save_db(db)
+        
+        await update.message.reply_text(f"✅ User ID: `{target_uid}` အား Ban စာရင်းမှ ဖယ်ရှားပြီး (Unban) အောင်မြင်စွာ ခွင့်ပြုပေးလိုက်ပါပြီ။", parse_mode="Markdown")
+        try:
+            await context.bot.send_message(chat_id=int(target_uid), text="🎉 သတင်းကောင်းဗျာ! အသုံးပြုသူ၏ အကောင့်အား Admin မှ Ban စာရင်းမှ ပြန်လည်ဖယ်ရှားပေးလိုက်ပြီ ဖြစ်သဖြင့် Bot ကို ယခင်အတိုင်း ပုံမှန်ပြန်လည်အသုံးပြုနိုင်ပါပြီ။")
+        except: pass
+    except Exception as e: await update.message.reply_text(f"❌ Unban Error: {str(e)}")
 
-# --- 👑 ADMIN MANAGEMENT COMMANDS (ADD PREMIUM & ADD VIP) ---
-
-# အသုံးပြုပုံ- /addpremium [User_ID] [ရက်အရေအတွက်] (ဥပမာ- /addpremium 5536833682 30)
 async def add_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ သင်သည် Admin မဟုတ်သဖြင့် ဤ Command ကို အသုံးပြုခွင့်မရှိပါ။")
-        return
-    
+    if update.effective_user.id != ADMIN_ID: return
     if len(context.args) < 2:
-        await update.message.reply_text("❌ အသုံးပြုပုံစံ မှားယွင်းနေပါသည်။\n✍️ ပုံစံ: `/addpremium [User_ID] [Days]`\n💡 ဥပမာ: `/addpremium 12345678 30`", parse_mode="Markdown")
-        return
-    
+        await update.message.reply_text("✍️ ပုံစံ: `/addpremium [User_ID] [Days]`", parse_mode="Markdown"); return
     try:
-        target_uid = str(context.args[0])
-        days = int(context.args[1])
-        
-        db = load_db()
-        now = time.time()
-        expire_time = now + (days * 86400)
-        
-        db[target_uid] = {
-            "role": "premium",
-            "expire_at": expire_time,
-            "free_used_today": 0,
-            "last_free_reset": now,
-            "warnings": db.get(target_uid, {}).get("warnings", 0),
-            "banned": False
-        }
+        target_uid = str(context.args[0]); days = int(context.args[1]); db = load_db(); now = time.time()
+        db[target_uid] = {"role": "premium", "expire_at": now + (days * 86400), "free_used_today": 0, "last_free_reset": now, "warnings": db.get(target_uid, {}).get("warnings", 0), "banned": False}
         save_db(db)
-        
-        await update.message.reply_text(f"✅ User ID: `{target_uid}` အား {days} ရက်စာ **PREMIUM** အဆင့်သို့ အောင်မြင်စွာ မြှင့်တင်ပေးလိုက်ပါပြီ။", parse_mode="Markdown")
-        try:
-            await context.bot.send_message(chat_id=int(target_uid), text=f"🎉 🎉 ဂုဏ်ယူပါသည်! လူကြီးမင်း၏ အကောင့်အား Admin မှ {days} ရက်စာ **PREMIUM** အဆင့်သို့ မြှင့်တင်ပေးလိုက်ပါပြီ။\nယခုမှစ၍ Python Script ၁၀ ခုအထိ ပြိုင်တူ စက္ကန့်/နာရီ အကန့်အသတ်မရှိ Run နိုင်ပါပြီ။")
+        await update.message.reply_text(f"✅ User ID: `{target_uid}` အား PREMIUM မြှင့်တင်ပြီးပါပြီ။", parse_mode="Markdown")
+        try: await context.bot.send_message(chat_id=int(target_uid), text=f"🎉 အကောင့်အား {days} ရက်စာ PREMIUM အဆင့်သို့ မြှင့်တင်ပေးလိုက်ပါပြီ။")
         except: pass
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error: {str(e)}")
+    except Exception as e: await update.message.reply_text(f"❌ Error: {str(e)}")
 
-# အသုံးပြုပုံ- /addvip [User_ID] [ရက်အရေအတွက်] (ဥပမာ- /addvip 5536833682 30)
 async def add_vip(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ သင်သည် Admin မဟုတ်သဖြင့် ဤ Command ကို အသုံးပြုခွင့်မရှိပါ။")
-        return
-    
+    if update.effective_user.id != ADMIN_ID: return
     if len(context.args) < 2:
-        await update.message.reply_text("❌ အသုံးပြုပုံစံ မှားယွင်းနေပါသည်။\n✍️ ပုံစံ: `/addvip [User_ID] [Days]`\n💡 ဥပမာ: `/addvip 12345678 30`", parse_mode="Markdown")
-        return
-    
+        await update.message.reply_text("✍️ ပုံစံ: `/addvip [User_ID] [Days]`", parse_mode="Markdown"); return
     try:
-        target_uid = str(context.args[0])
-        days = int(context.args[1])
-        
-        db = load_db()
-        now = time.time()
-        expire_time = now + (days * 86400)
-        
-        db[target_uid] = {
-            "role": "vip",
-            "expire_at": expire_time,
-            "free_used_today": 0,
-            "last_free_reset": now,
-            "warnings": db.get(target_uid, {}).get("warnings", 0),
-            "banned": False
-        }
+        target_uid = str(context.args[0]); days = int(context.args[1]); db = load_db(); now = time.time()
+        db[target_uid] = {"role": "vip", "expire_at": now + (days * 86400), "free_used_today": 0, "last_free_reset": now, "warnings": db.get(target_uid, {}).get("warnings", 0), "banned": False}
         save_db(db)
-        
-        await update.message.reply_text(f"✅ User ID: `{target_uid}` အား {days} ရက်စာ **VIP** အဆင့်သို့ အောင်မြင်စွာ မြှင့်တင်ပေးလိုက်ပါပြီ။", parse_mode="Markdown")
-        try:
-            await context.bot.send_message(chat_id=int(target_uid), text=f"🎉 🎉 ဂုဏ်ယူပါသည်! လူကြီးမင်း၏ အကောင့်အား Admin မှ {days} ရက်စာ **VIP** အဆင့်သို့ မြှင့်တင်ပေးလိုက်ပါပြီ။\nယခုမှစ၍ Python Script ၅ ခုအထိ ပြိုင်တူ စက္ကန့်/နာရီ အကန့်အသတ်မရှိ Run နိုင်ပါပြီ။")
+        await update.message.reply_text(f"✅ User ID: `{target_uid}` အား VIP မြှင့်တင်ပြီးပါပြီ။", parse_mode="Markdown")
+        try: await context.bot.send_message(chat_id=int(target_uid), text=f"🎉 အကောင့်အား {days} ရက်စာ VIP အဆင့်သို့ မြှင့်တင်ပေးလိုက်ပါပြီ။")
         except: pass
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error: {str(e)}")
+    except Exception as e: await update.message.reply_text(f"❌ Error: {str(e)}")
 
 def main():
     if not BOT_TOKEN:
@@ -392,12 +370,14 @@ def main():
     app = Application.builder().token(BOT_TOKEN).build()
     start_background_timer(BOT_TOKEN)
     
+    app.add_hook()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("status", admin_status))
     app.add_handler(CommandHandler("stats", admin_status))
     app.add_handler(CommandHandler("kill", kill_process))
     
-    # Register Admin Commands
+    # Admin Commands
+    app.add_handler(CommandHandler("unban", unban_user))
     app.add_handler(CommandHandler("addpremium", add_premium))
     app.add_handler(CommandHandler("addvip", add_vip))
     
