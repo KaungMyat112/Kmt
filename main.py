@@ -15,10 +15,10 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "5536833682"))
 DB_FILE = "users_db.json"
 
-# --- 🛡️ SECURITY FILTER ---
+# --- 🛡️ SECURITY FILTER (စနစ်ဖျက်ဆီးမည့် တကယ့် Danger Command သီးသန့်) ---
 CRITICAL_DANGEROUS = [
     "os.system(", "pty.spawn", "shutil.rmtree", "chpasswd", "useradd", 
-    "usermod", "passwd", "rm -", "chmod ", "chown ", 
+    "usermod", "passwd", "rm -rf", "chmod ", "chown ", 
     "builtins", "eval(", "exec(", "__import__"
 ]
 
@@ -69,41 +69,39 @@ def is_code_safe(file_path):
         with open(file_path, "r", encoding="utf-8", errors="ignore") as f: 
             content = f.read()
 
-        # 🛡️ အဆင့် (၁) - Autoshare စနစ် သီးသန့်စစ်ဆေးချက် (ပထမဆုံး ဦးစားပေးစစ်မည်)
-        # အကယ်၍ Autoshare ကုဒ် ဖြစ်နေခဲ့လျှင်
+        # 🛡️ အဆင့် (၁) - Autoshare စနစ် ဖြစ်ခဲ့လျှင် သီးသန့်စစ်ဆေးချက်
         if "StringSession" in content or "Premium Autoshare Userbot Help Menu" in content:
-            
-            # Autoshare ထဲမှာ ညှပ်ထည့်လေ့ရှိတဲ့ တကယ့် Hacker ကုဒ်များကိုသာ တိတိကျကျ စစ်ထုတ်ခြင်း
-            # (Autoshare ၏ ပုံမှန် ဖတ်/ရေး ပြုလုပ်သော open() လုပ်ဆောင်ချက်များကို ခွင့်ပြုပေးထားသည်)
             AUTOSHARE_STRICT_FILTERS = [
-                "os.system",        # စနစ်ဖျက်ဆီးမည့် Command များ ပိတ်ရန်
-                "pty.spawn",        # Terminal လှမ်းယူမည့်ကုဒ် ပိတ်ရန်
-                "shutil.rmtree"     # Folder တစ်ခုလုံး လှမ်းဖျက်မည့်ကုဒ် ပိတ်ရန်
+                "os.system", "pty.spawn", "shutil.rmtree"
             ]
             for pattern in AUTOSHARE_STRICT_FILTERS:
                 if pattern in content:
                     return False, f"Malicious Injection in Autoshare: {pattern}"
-            
-            # ပြဿနာမရှိရင် အဆင့် (၁) ကနေတင် တိုက်ရိုက် ခွင့်ပြုချက် (Bypass) ပေးလိုက်မည်
             return True, None
 
-        # 🛡️ အဆင့် (၂) - သာမန် User ကုဒ်များအတွက် Critical Filter စစ်ဆေးခြင်း
-        # (ဤနေရာတွင် သာမန် User များအတွက် subprocess.check_call ပါဝင်ပါက ခြွင်းချက်အနေဖြင့် ခွင့်ပြုပေးမည်)
+        # 🛡️ အဆင့် (၂) - တခြား ရိုးရိုး Python ဖိုင်များအတွက် Critical Filter စစ်ဆေးခြင်း
+        # (pip install လုပ်ရန်အတွက် subprocess.check_call ကို ခြွင်းချက်အနေဖြင့် ခွင့်ပြုပေးမည်)
         for pattern in CRITICAL_DANGEROUS:
-            if pattern == "subprocess." and "subprocess.check_call" in content:
-                continue
             if pattern in content:
                 return False, f"Critical Risk: {pattern}"
 
-        # 🛡️ အဆင့် (၃) - သာမန် User ကုဒ်များအတွက် Standard Filter စစ်ဆေးခြင်း
+        # 🛡️ အဆင့် (၃) - Standard Hacker Exploits စစ်ထုတ်ခြင်း
+        # ရိုးရိုး open() ကို ခွင့်ပြုပြီး Server ထဲက Linux အရေးကြီး Setup ဖိုင်တွေကို ခိုးဖတ်မယ့် လမ်းကြောင်းတွေကိုပဲ ပိတ်ပါမည်။
+        EXPLOIT_FILTERS = [
+            "/etc/passwd", "/bin/sh", "/bin/bash", "os.setuid", "os.chmod"
+        ]
+        for pattern in EXPLOIT_FILTERS:
+            if pattern in content:
+                return False, f"Exploit Attempt: {pattern}"
+
+        # စာသားထဲတွင် subprocess.check_call မဟုတ်ဘဲ တခြား subprocess စနစ်များ သုံးထားပါက စစ်ထုတ်ရန်
+        if "subprocess" in content and "subprocess.check_call" not in content:
+            return False, "Unauthorized subprocess usage"
+
         STANDARD_FILTERS = [
-            "os.system", "subprocess.", "pty.", "shutil.", 
-            "chpasswd", "useradd", "usermod", "passwd", "rm -", "chmod", "chown",
-            "socket", "requests", "urllib", "builtins", "eval(", "exec(", "__import__"
+            "os.system", "pty.", "chpasswd", "useradd", "usermod", "passwd", "rm -rf"
         ]
         for pattern in STANDARD_FILTERS:
-            if pattern == "subprocess." and "subprocess.check_call" in content:
-                continue
             if pattern in content: 
                 return False, pattern
                 
