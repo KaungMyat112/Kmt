@@ -327,7 +327,7 @@ async def unban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
             
         db[target_uid]["banned"] = False
-        db[target_uid]["warnings"] = 0 # သတိပေးချက်အရေအတွက်ကိုပါ အစကပြန်စပေးခြင်း
+        db[target_uid]["warnings"] = 0 
         save_db(db)
         
         await update.message.reply_text(f"✅ User ID: `{target_uid}` အား Ban စာရင်းမှ ဖယ်ရှားပြီး (Unban) အောင်မြင်စွာ ခွင့်ပြုပေးလိုက်ပါပြီ။", parse_mode="Markdown")
@@ -370,7 +370,6 @@ def main():
     app = Application.builder().token(BOT_TOKEN).build()
     start_background_timer(BOT_TOKEN)
     
-    app.add_hook()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("status", admin_status))
     app.add_handler(CommandHandler("stats", admin_status))
