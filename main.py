@@ -5,6 +5,7 @@ import subprocess
 import re
 import threading
 import asyncio
+import signal
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
@@ -15,14 +16,12 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "5536833682"))
 DB_FILE = "users_db.json"
 
-# --- 🛡️ SECURITY FILTER (စနစ်ဖျက်ဆီးမည့် တကယ့် Danger Command သီးသန့်) ---
-CRITICAL_DANGEROUS = [
-    "os.system(", "pty.spawn", "shutil.rmtree", "chpasswd", "useradd", 
-    "usermod", "passwd", "rm -rf", "chmod ", "chown ", 
-    "builtins", "eval(", "exec(", "__import__"
-]
-
+# လက်ရှိ Run နေဆဲ Process များကို သိမ်းဆည်းရန်
 running_processes = {}
+
+# --- 🔐 STRICT SECURITY CHECK (ADMIN ONLY) ---
+def is_admin(user_id):
+    return user_id == ADMIN_ID
 
 # --- Database Functions ---
 def load_db():
@@ -35,183 +34,75 @@ def load_db():
 def save_db(db):
     with open(DB_FILE, "w") as f: json.dump(db, f, indent=4)
 
-def check_user_status(user_id, db):
-    uid = str(user_id)
-    now = time.time()
-    if user_id == ADMIN_ID: 
-        return {"role": "admin", "expire_at": 0, "free_used_today": 0, "warnings": 0, "banned": False}
-    
-    if uid not in db:
-        db[uid] = {"role": "free", "expire_at": 0, "free_used_today": 0, "last_free_reset": now, "warnings": 0, "banned": False}
-        save_db(db)
-        
-    user = db[uid]
-    if "warnings" not in user: user["warnings"] = 0
-    if "banned" not in user: user["banned"] = False
-        
-    if user.get("role") == "free" and (now - user.get("last_free_reset", 0)) >= 86400:
-        user["free_used_today"] = 0
-        user["last_free_reset"] = now
-        save_db(db)
-    if user.get("role") in ["vip", "premium"] and now > user.get("expire_at", 0):
-        user["role"] = "free"; user["expire_at"] = 0; save_db(db)
-    return user
-
-def get_max_allowed_files(role):
-    if role == "admin": return 999999
-    if role == "premium": return 10
-    if role == "vip": return 5
-    return 1
-
-# --- 🛡️ SMART CODE SAFETY CHECKER ---
-def is_code_safe(file_path):
-    try:
-        with open(file_path, "r", encoding="utf-8", errors="ignore") as f: 
-            content = f.read()
-
-        # 🛡️ အဆင့် (၁) - Autoshare စနစ် ဖြစ်ခဲ့လျှင် သီးသန့်စစ်ဆေးချက်
-        if "StringSession" in content or "Premium Autoshare Userbot Help Menu" in content:
-            AUTOSHARE_STRICT_FILTERS = [
-                "os.system", "pty.spawn", "shutil.rmtree"
-            ]
-            for pattern in AUTOSHARE_STRICT_FILTERS:
-                if pattern in content:
-                    return False, f"Malicious Injection in Autoshare: {pattern}"
-            return True, None
-
-        # 🛡️ အဆင့် (၂) - တခြား ရိုးရိုး Python ဖိုင်များအတွက် Critical Filter စစ်ဆေးခြင်း
-        # (pip install လုပ်ရန်အတွက် subprocess.check_call ကို ခြွင်းချက်အနေဖြင့် ခွင့်ပြုပေးမည်)
-        for pattern in CRITICAL_DANGEROUS:
-            if pattern in content:
-                return False, f"Critical Risk: {pattern}"
-
-        # 🛡️ အဆင့် (၃) - Standard Hacker Exploits စစ်ထုတ်ခြင်း
-        # ရိုးရိုး open() ကို ခွင့်ပြုပြီး Server ထဲက Linux အရေးကြီး Setup ဖိုင်တွေကို ခိုးဖတ်မယ့် လမ်းကြောင်းတွေကိုပဲ ပိတ်ပါမည်။
-        EXPLOIT_FILTERS = [
-            "/etc/passwd", "/bin/sh", "/bin/bash", "os.setuid", "os.chmod"
-        ]
-        for pattern in EXPLOIT_FILTERS:
-            if pattern in content:
-                return False, f"Exploit Attempt: {pattern}"
-
-        # စာသားထဲတွင် subprocess.check_call မဟုတ်ဘဲ တခြား subprocess စနစ်များ သုံးထားပါက စစ်ထုတ်ရန်
-        if "subprocess" in content and "subprocess.check_call" not in content:
-            return False, "Unauthorized subprocess usage"
-
-        STANDARD_FILTERS = [
-            "os.system", "pty.", "chpasswd", "useradd", "usermod", "passwd", "rm -rf"
-        ]
-        for pattern in STANDARD_FILTERS:
-            if pattern in content: 
-                return False, pattern
-                
-        return True, None
-    except: 
-        return False, "Cannot read file"
-
-# --- 🛡️ BACKGROUND THREAD TIMER ---
-def start_background_timer(token):
+# --- 🛡️ BACKGROUND PROCESS CLEANER (Zombie & Resource Leak Killer) ---
+def start_background_cleaner():
     def loop_checker():
-        bot_client = Bot(token=token)
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
         while True:
             try:
-                time.sleep(60)
-                db = load_db()
-                now = time.time()
-                for user_id, files in list(running_processes.items()):
-                    uid = str(user_id)
-                    if int(user_id) == ADMIN_ID: continue
-                    if uid in db and db[uid].get("role") in ["vip", "premium", "admin"]: continue
-                        
-                    user = db.setdefault(uid, {"role": "free", "expire_at": 0, "free_used_today": 0, "last_free_reset": now})
-                    already_used = user.get("free_used_today", 0)
-                    current_running_time = 0
+                time.sleep(30) # ၃၀ စက္ကန့်တစ်ကြိမ် မလိုအပ်တဲ့ data တွေ လိုက်ရှင်းမယ်
+                for uid, files in list(running_processes.items()):
                     for fpath, p_info in list(files.items()):
-                        if p_info["process"].poll() is None:
-                            current_running_time += (now - p_info["start_time"])
-                    if (already_used + current_running_time) >= 18000:
-                        for fpath, p_info in list(files.items()):
-                            if p_info["process"].poll() is None:
-                                try: p_info["process"].terminate(); p_info["process"].wait()
-                                except: pass
-                        user["free_used_today"] = 18000; save_db(db)
-                        if user_id in running_processes: del running_processes[user_id]
-                        try: loop.run_until_complete(bot_client.send_message(chat_id=int(user_id), text="⚠️ ယနေ့အတွက် Free ၅ နာရီ သုံးစွဲမှု ပြည့်သွားသဖြင့် Script များကို စနစ်မှ ရပ်ဆိုင်းလိုက်ပါပြီ။"))
-                        except: pass
+                        # အကယ်၍ Process က ရပ်သွားခဲ့ရင် သို့မဟုတ် poll() က အဖြေပြန်ပေးရင် Data ထဲက ဖြုတ်ပစ်မယ်
+                        if p_info["process"].poll() is not None:
+                            try:
+                                p_info["process"].wait() # ကောင်းကောင်းမွန်မွန် resource ပြန်လွှတ်ပေးရန်
+                            except: pass
+                            if uid in running_processes and fpath in running_processes[uid]:
+                                del running_processes[uid][fpath]
             except: pass
     threading.Thread(target=loop_checker, daemon=True).start()
 
 # --- Bot Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id; db = load_db(); user = check_user_status(user_id, db)
-    if user.get("banned"):
-        await update.message.reply_text("❌ စနစ်စည်းကမ်း ဖောက်ဖျက်မှုကြောင့် သင့်အား အပြီးပိုင် Ban ထားပါသည်။"); return
+    user_id = update.effective_user.id
+    
+    # ❌ Admin မဟုတ်ရင် လုံးဝ အသုံးပြုခွင့်မပေးပါ
+    if not is_admin(user_id):
+        await update.message.reply_text("⛔ <b>KRAW Bot Hosting [Private Mode]</b>\n\nဤ Bot သည် စနစ်ထိန်းသိမ်းသူ (Admin) သီးသန့်အသုံးပြုရန် ဖြစ်သောကြောင့် သင့်တွင် အသုံးပြုခွင့် မရှိပါဗျာ။", parse_mode="HTML")
+        return
         
-    role_text = str(user.get("role", "free")).upper()
-    if user.get("role") == "admin": expire_text = "အကန့်အသတ်မရှိ (ADMIN)"
-    elif user.get("role") == "free":
-        already_used = user.get("free_used_today", 0); current_running_time = 0
-        for fpath, p_info in list(running_processes.get(user_id, {}).items()):
-            if p_info["process"].poll() is None: current_running_time += (time.time() - p_info["start_time"])
-        left_seconds = max(0, 18000 - (already_used + current_running_time))
-        expire_text = f"Free (ယနေ့ကျန်ရှိချိန်: {int(left_seconds // 3600)} နာရီ {int((left_seconds % 3600) // 60)} မိနစ်)"
-    else: expire_text = datetime.fromtimestamp(user.get("expire_at", 0)).strftime('%Y-%m-%d %H:%M:%S')
-    max_files = get_max_allowed_files(user.get("role"))
-    await update.message.reply_text(f"👋 KRAW Bot Hosting မှ ကြိုဆိုပါတယ်။\n\n📊 သင့်အဆင့်: *{role_text}*\n⏳ သက်တမ်းကုန်ရက်: `{expire_text}`\n🚀 ပြိုင်တူ Run ခွင့်: `{max_files if max_files != 999999 else 'အကန့်အသတ်မရှိ'}`\n\nPython (.py) ဖိုင် တင်ပေးပါ။", parse_mode="Markdown")
+    await update.message.reply_text(
+        f"👋 <b>KRAW Private Hosting မှ ကြိုဆိုပါတယ် Admin စော။</b>\n\n"
+        f"👑 Role: <code>OWNER / ADMIN</code>\n"
+        f"🚀 Server Limit: <code>အကန့်အသတ်မရှိ</code>\n\n"
+        f"အသုံးပြုရန် Python (.py) ဖိုင်ကို တင်ပေးနိုင်ပါပြီခင်ဗျာ။", 
+        parse_mode="HTML"
+    )
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id; document = update.message.document; db = load_db(); user = check_user_status(user_id, db)
-    if user.get("banned"):
-        await update.message.reply_text("❌ စနစ်စည်းကမ်း ဖောက်ဖျက်မှုကြောင့် သင့်အား အပြီးပိုင် Ban ထားပါသည်။"); return
+    user_id = update.effective_user.id
+    
+    # ❌ ဤနေရာတွင်လည်း တခြားသူ တင်လို့မရအောင် ထပ်ပိတ်ထားပါသည်
+    if not is_admin(user_id):
+        await update.message.reply_text("❌ ခွင့်ပြုချက်မရှိဘဲ ဖိုင်တင်ခွင့် မရှိပါ။")
+        return
         
+    document = update.message.document
     if not document or not document.file_name: return
     if not document.file_name.endswith('.py'):
         await update.message.reply_text("❌ ကျေးဇူးပြု၍ Python (.py) ဖိုင်ကိုသာ ပို့ပေးပါ။"); return
         
-    active_count = sum(1 for p in running_processes.get(user_id, {}).values() if p["process"].poll() is None)
-    if active_count >= get_max_allowed_files(user.get("role")):
-        await update.message.reply_text("⚠️ သင့်အဆင့်၏ Limit ပြည့်နေပါသည်။ အဟောင်းကို အရင်ရပ်ပေးပါ။"); return
-        
-    file_name = f"{user_id}_{int(time.time())}_{document.file_name}"
-    file = await context.bot.get_file(document.file_id); await file.download_to_drive(file_name)
+    file_name = f"admin_{int(time.time())}_{document.file_name}"
+    file = await context.bot.get_file(document.file_id)
+    await file.download_to_drive(file_name)
     full_path = os.path.abspath(file_name)
-    
-    if user_id == ADMIN_ID: is_safe, matched_pattern = True, None
-    else: is_safe, matched_pattern = is_code_safe(full_path)
-        
-    if not is_safe:
-        if os.path.exists(full_path): os.remove(full_path)
-        user["warnings"] += 1
-        
-        if user["warnings"] >= 2:
-            user["banned"] = True; save_db(db)
-            if user_id in running_processes:
-                for fpath, p_info in list(running_processes[user_id].items()):
-                    try: p_info["process"].terminate()
-                    except: pass
-                del running_processes[user_id]
-            await update.message.reply_text("🚨 <b>စည်းကမ်းဖောက်ဖျက်မှု ဒုတိယအကြိမ်မြောက်ဖြစ်သဖြင့် သင့်အကောင့်အား အပြီးပိုင် BAN လိုက်ပါပြီ။</b>", parse_mode="HTML")
-            try: await context.bot.send_message(chat_id=ADMIN_ID, text=f"🚨 <b>User Banned Noti</b>\nUser ID: <code>{user_id}</code> သည် အန္တရာယ်ရှိကုဒ် ၂ ကြိမ်တင်သဖြင့် စနစ်မှ အပြီးပိုင် BAN လိုက်ပါပြီ။", parse_mode="HTML")
-            except: pass
-        else:
-            save_db(db)
-            await update.message.reply_text("⚠️ <b>သတိပေးချက် (Warn 1)</b>\nသင့်ကုဒ်ထဲတွင် ခွင့်မပြုထားသော စနစ်ဖျက်ဆီးမည့် Code များ ပါဝင်နေသည်။ နောက်တစ်ကြိမ် ထပ်မံတင်ပါက Bot အသုံးပြုခွင့် လုံးဝပိတ် (BAN) ခံရမည်။", parse_mode="HTML")
-            try: await context.bot.send_message(chat_id=ADMIN_ID, text=f"⚠️ <b>User Warning Noti</b>\nUser ID: <code>{user_id}</code> သည် အန္တရာယ်ရှိကုဒ်တင်သဖြင့် စနစ်မှ Warn 1 ကြိမ် ပေးလိုက်သည်။", parse_mode="HTML")
-            except: pass
-        return
         
     msg_file_key = f"file_{update.message.message_id}"
     context.user_data[msg_file_key] = full_path
     
-    keyboard = [[InlineKeyboardButton("▶️ စတင်ရန်", callback_data=f"run__{update.message.message_id}")], [InlineKeyboardButton("🗑️ ဖျက်ရန်", callback_data=f"del__{update.message.message_id}")]]
-    await update.message.reply_text(text=f"📄 ဖိုင်အမည်: `{document.file_name}`\n🔴 ရပ်နားထားသည်", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+    keyboard = [
+        [InlineKeyboardButton("▶️ စတင် Run မည်", callback_data=f"run__{update.message.message_id}")], 
+        [InlineKeyboardButton("🗑️ စနစ်ထဲမှ ဖျက်မည်", callback_data=f"del__{update.message.message_id}")]
+    ]
+    await update.message.reply_text(text=f"📄 ဖိုင်အမည်: `{document.file_name}`\n🔴 အခြေအနေ: ရပ်နားထားသည်", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query; await query.answer(); user_id = query.from_user.id
-    db = load_db(); user = check_user_status(user_id, db)
-    if user.get("banned"): return
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    
+    # ❌ ခလုတ်များကိုပါ Admin မှလွဲ၍ နှိပ်ခွင့်ပိတ်
+    if not is_admin(user_id): return
 
     data_parts = query.data.split("__")
     if len(data_parts) != 2: return
@@ -227,29 +118,32 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id not in running_processes: running_processes[user_id] = {}
 
     if action == "run":
-        if user_id == ADMIN_ID: is_safe = True
-        else: is_safe, _ = is_code_safe(file_path)
-        if not is_safe: await query.edit_message_text("❌ စစ်ဆေးမှုအရ ဘေးကင်းမှုမရှိပါ။"); return
-        
-        log_path = f"{file_path}.log"; log_file = open(log_path, "w")
+        log_path = f"{file_path}.log"
+        log_file = open(log_path, "w")
         try:
-            process = subprocess.Popen(["python3", file_path], stdout=log_file, stderr=log_file)
+            # Process Group (os.setsid) ဆောက်ပြီး Background တင်မယ်
+            process = subprocess.Popen(["python3", file_path], stdout=log_file, stderr=log_file, preexec_fn=os.setsid)
             running_processes[user_id][file_path] = {"process": process, "start_time": time.time(), "pid": process.pid, "display_name": display_name}
             
-            keyboard = [[InlineKeyboardButton("⏸️ ခေတ္တရပ်ရန်", callback_data=f"stop__{target_msg_id}")], [InlineKeyboardButton("📋 Log ဖိုင်ရယူရန်", callback_data=f"log__{target_msg_id}")]]
-            await query.edit_message_text(text=f"📄 ဖိုင်အမည်: `{display_name}`\n🟢 အလုပ်လုပ်နေသည် (PID: <code>{process.pid}</code>)\n\n<i>(မှတ်ချက်။ ။ အကယ်၍ ဤခလုတ် အလုပ်မလုပ်တော့ပါက <code>/kill {process.pid}</code> ဟု ရိုက်၍ ရပ်နိုင်ပါသည်)</i>", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+            keyboard = [
+                [InlineKeyboardButton("⏸️ အပြီးသတ် ရပ်မည် (Kill)", callback_data=f"stop__{target_msg_id}")], 
+                [InlineKeyboardButton("📋 Log ကြည့်မည်", callback_data=f"log__{target_msg_id}")]
+            ]
+            await query.edit_message_text(text=f"📄 ဖိုင်အမည်: `{display_name}`\n🟢 အခြေအနေ: အလုပ်လုပ်နေသည် (PID: <code>{process.pid}</code>)", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
         except Exception as e: await query.edit_message_text(f"❌ Error: {str(e)}")
         
     elif action == "stop":
         if user_id in running_processes and file_path in running_processes[user_id]:
             p_info = running_processes[user_id][file_path]
-            try: p_info["process"].terminate(); p_info["process"].wait()
+            try:
+                # မလိုအပ်တဲ့ data တွေ မကျန်အောင် ရပ်လိုက်တာနဲ့ PID Group တစ်ခုလုံးကို အပြတ် Kill ပစ်မယ်
+                os.killpg(os.getpgid(p_info["process"].pid), signal.SIGKILL)
+                p_info["process"].wait()
             except: pass
-            if user.get("role") == "free": user["free_used_today"] += (time.time() - p_info["start_time"]); save_db(db)
             del running_processes[user_id][file_path]
             
-            keyboard = [[InlineKeyboardButton("▶️ စတင်ရန်", callback_data=f"run__{target_msg_id}")], [InlineKeyboardButton("🗑️ ဖျက်ရန်", callback_data=f"del__{target_msg_id}")]]
-            await query.edit_message_text(text=f"📄 ဖိုင်အမည်: `{display_name}`\n🔴 ရပ်နားထားသည်", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+            keyboard = [[InlineKeyboardButton("▶️ စတင် Run မည်", callback_data=f"run__{target_msg_id}")], [InlineKeyboardButton("🗑️ စနစ်ထဲမှ ဖျက်မည်", callback_data=f"del__{target_msg_id}")]]
+            await query.edit_message_text(text=f"📄 ဖိုင်အမည်: `{display_name}`\n🔴 အခြေအနေ: အပြီးသတ် သတ် (Kill) ပြီးပါပြီ", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
             
     elif action == "log":
         if os.path.exists(f"{file_path}.log"):
@@ -258,145 +152,86 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
     elif action == "del":
         if user_id in running_processes and file_path in running_processes[user_id]:
-            try: running_processes[user_id][file_path]["process"].terminate(); running_processes[user_id][file_path]["process"].wait()
+            try:
+                os.killpg(os.getpgid(running_processes[user_id][file_path]["process"].pid), signal.SIGKILL)
+                running_processes[user_id][file_path]["process"].wait()
             except: pass
             del running_processes[user_id][file_path]
         if os.path.exists(file_path): os.remove(file_path)
         if os.path.exists(f"{file_path}.log"): os.remove(f"{file_path}.log")
-        await query.edit_message_text("🗑️ ဖိုင်နှင့် Log များကို စနစ်မှ လုံးဝဖျက်သိမ်းပြီးပါပြီ။")
+        await query.edit_message_text("🗑️ ဖိုင်နှင့် မလိုအပ်သော Log Data အားလုံးကို Server ပေါ်မှ အပြီးပိုင် ဖျက်ဆီးပြီးပါပြီ။")
 
-# --- 📋 STATUS & MONITORING SYSTEM ---
+# --- 📋 STATUS SYSTEM ---
 async def admin_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        user_id = update.effective_user.id; db = load_db(); user = check_user_status(user_id, db)
-        if user.get("banned"): return
+    user_id = update.effective_user.id
+    if not is_admin(user_id): return
 
-        total_users = len(db); active_scripts_text = ""; global_active_count = 0
-        
-        for uid, files in running_processes.items():
-            for fpath, p_info in list(files.items()):
-                if p_info["process"].poll() is None:
-                    global_active_count += 1
-                    if user_id == ADMIN_ID or int(uid) == user_id:
-                        active_scripts_text += f"🔹 <b>{p_info['display_name']}</b> (PID: <code>{p_info['pid']}</code>) - Owner ID: {uid}\n"
+    active_scripts_text = ""
+    global_active_count = 0
+    
+    for uid, files in running_processes.items():
+        for fpath, p_info in list(files.items()):
+            if p_info["process"].poll() is None:
+                global_active_count += 1
+                active_scripts_text += f"🔹 <b>{p_info['display_name']}</b> (PID: <code>{p_info['pid']}</code>)\n"
 
-        text = "📊 <b>KRAW Server Global Statistics</b>\n----------------------------------\n"
-        if user_id == ADMIN_ID: text += f"👥 Total Registered Users: {total_users} ဦး\n"
-        text += f"🔥 Total Running Scripts on Server: {global_active_count} ခု\n\n"
-        text += "📝 <b>သင့်ထံတွင် လည်ပတ်နေသော Active Scripts များ:</b>\n" if user_id != ADMIN_ID else "📝 <b>Server တစ်ခုလုံးတွင် လည်ပတ်နေသော Active Scripts များ:</b>\n"
-        text += active_scripts_text if active_scripts_text != "" else "❌ လက်ရှိ မည်သည့် Script မျှ လည်ပတ်ခြင်းမရှိပါ။\n"
-        
-        if global_active_count > 0:
-            text += "\n💡 <i>Script ကို အတင်းရပ်လိုပါက <code>/kill [PID]</code> ဟု ရိုက်ပို့ပါ။</i>"
-        await update.message.reply_text(text, parse_mode="HTML")
-    except Exception as e: await update.message.reply_text(f"❌ Stats Error: {str(e)}")
+    text = "📊 <b>Server Monitor (Admin Only)</b>\n----------------------------------\n"
+    text += f"🔥 လည်ပတ်နေသော Script စုစုပေါင်း: {global_active_count} ခု\n\n"
+    text += "📝 <b>Active Scripts List:</b>\n"
+    text += active_scripts_text if active_scripts_text != "" else "❌ လက်ရှိ မည်သည့် Script မျှ Run မထားပါ။\n"
+    
+    await update.message.reply_text(text, parse_mode="HTML")
 
-# --- ☠️ KILL COMMAND ---
+# --- ☠️ FORCE KILL COMMAND ---
 async def kill_process(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        user_id = update.effective_user.id; db = load_db(); user = check_user_status(user_id, db)
-        if user.get("banned"): return
-        if not context.args:
-            await update.message.reply_text("❌ ကျေးဇူးပြု၍ ရပ်လိုသော PID ထည့်ပေးပါ။", parse_mode="HTML"); return
-            
-        try: target_pid = int(context.args[0])
-        except: await update.message.reply_text("❌ PID သည် ကိန်းဂဏန်းအမှန် ဖြစ်ရပါမည်။"); return
-
-        found = False
-        for uid, files in list(running_processes.items()):
-            for fpath, p_info in list(files.items()):
-                if p_info["pid"] == target_pid:
-                    if user_id == ADMIN_ID or int(uid) == user_id:
-                        try: p_info["process"].terminate(); p_info["process"].wait()
-                        except: pass
-                        if db.get(str(uid), {}).get("role") == "free":
-                            db[str(uid)]["free_used_today"] += (time.time() - p_info["start_time"])
-                            save_db(db)
-                        del running_processes[uid][fpath]; found = True
-                        await update.message.reply_text(f"✅ PID: <code>{target_pid}</code> ကို အောင်မြင်စွာ ရပ်ဆိုင်းလိုက်ပါပြီ။", parse_mode="HTML")
-                        break
-                    else:
-                        await update.message.reply_text("❌ ဤ Script ကို ရပ်ပစ်ရန် ခွင့်ပြုချက်မရှိပါ။"); return
-            if found: break
-        if not found: await update.message.reply_text(f"❌ သတ်မှတ်ထားသော PID: {target_pid} အား မတွေ့ရပါ။")
-    except Exception as e: await update.message.reply_text(f"❌ Kill Error: {str(e)}")
-
-# --- 👑 ADMIN MANAGEMENT COMMANDS ---
-
-# 🔓 UNBAN COMMAND
-async def unban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ သင်သည် Admin မဟုတ်သဖြင့် ဤ Command ကို အသုံးပြုခွင့်မရှိပါ။")
-        return
+    user_id = update.effective_user.id
+    if not is_admin(user_id): return
+    
     if not context.args:
-        await update.message.reply_text("❌ အသုံးပြုပုံစံ မှားယွင်းနေပါသည်။\n✍️ ပုံစံ: `/unban [User_ID]`", parse_mode="Markdown")
-        return
-    try:
-        target_uid = str(context.args[0])
-        db = load_db()
+        await update.message.reply_text("❌ ကျေးဇူးပြု၍ သတ်လိုသော PID ထည့်ပေးပါ။ ပုံစံ: <code>/kill [PID]</code>", parse_mode="HTML"); return
         
-        if target_uid not in db:
-            await update.message.reply_text("❌ ယခု ID သည် Database စာရင်းထဲတွင် မရှိသေးပါဗျာ။")
-            return
-            
-        db[target_uid]["banned"] = False
-        db[target_uid]["warnings"] = 0 
-        save_db(db)
-        
-        await update.message.reply_text(f"✅ User ID: `{target_uid}` အား Ban စာရင်းမှ ဖယ်ရှားပြီး အောင်မြင်စွာ ခွင့်ပြုပေးလိုက်ပါပြီ။", parse_mode="Markdown")
+    try: target_pid = int(context.args[0])
+    except: await update.message.reply_text("❌ PID သည် ဂဏန်းဖြစ်ရပါမည်။"); return
+
+    found = False
+    for uid, files in list(running_processes.items()):
+        for fpath, p_info in list(files.items()):
+            if p_info["pid"] == target_pid:
+                try:
+                    os.killpg(os.getpgid(target_pid), signal.SIGKILL)
+                    p_info["process"].wait()
+                except: pass
+                del running_processes[uid][fpath]
+                found = True
+                await update.message.reply_text(f"💥 PID: <code>{target_pid}</code> နှင့် ၎င်းနှင့်ပတ်သက်သော Data အားလုံးကို Force Kill လုပ်ပြီးပါပြီ။", parse_mode="HTML")
+                break
+        if found: break
+    if not found: 
         try:
-            await context.bot.send_message(chat_id=int(target_uid), text="🎉 သတင်းကောင်းဗျာ! အသုံးပြုသူ၏ အကောင့်အား Admin မှ Ban စာရင်းမှ ပြန်လည်ဖယ်ရှားပေးလိုက်ပြီ ဖြစ်သဖြင့် Bot ကို ပုံမှန်ပြန်လည်အသုံးပြုနိုင်ပါပြီ။")
-        except: pass
-    except Exception as e: await update.message.reply_text(f"❌ Unban Error: {str(e)}")
-
-async def add_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID: return
-    if len(context.args) < 2:
-        await update.message.reply_text("✍️ ပုံစံ: `/addpremium [User_ID] [Days]`", parse_mode="Markdown"); return
-    try:
-        target_uid = str(context.args[0]); days = int(context.args[1]); db = load_db(); now = time.time()
-        db[target_uid] = {"role": "premium", "expire_at": now + (days * 86400), "free_used_today": 0, "last_free_reset": now, "warnings": db.get(target_uid, {}).get("warnings", 0), "banned": False}
-        save_db(db)
-        await update.message.reply_text(f"✅ User ID: `{target_uid}` အား PREMIUM မြှင့်တင်ပြီးပါပြီ။", parse_mode="Markdown")
-        try: await context.bot.send_message(chat_id=int(target_uid), text=f"🎉 အကောင့်အား {days} ရက်စာ PREMIUM အဆင့်သို့ မြှင့်တင်ပေးလိုက်ပါပြီ။")
-        except: pass
-    except Exception as e: await update.message.reply_text(f"❌ Error: {str(e)}")
-
-async def add_vip(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID: return
-    if len(context.args) < 2:
-        await update.message.reply_text("✍️ ပုံစံ: `/addvip [User_ID] [Days]`", parse_mode="Markdown"); return
-    try:
-        target_uid = str(context.args[0]); days = int(context.args[1]); db = load_db(); now = time.time()
-        db[target_uid] = {"role": "vip", "expire_at": now + (days * 86400), "free_used_today": 0, "last_free_reset": now, "warnings": db.get(target_uid, {}).get("warnings", 0), "banned": False}
-        save_db(db)
-        await update.message.reply_text(f"✅ User ID: `{target_uid}` အား VIP မြှင့်တင်ပြီးပါပြီ။", parse_mode="Markdown")
-        try: await context.bot.send_message(chat_id=int(target_uid), text=f"🎉 အကောင့်အား {days} ရက်စာ VIP အဆင့်သို့ မြှင့်တင်ပေးလိုက်ပါပြီ။")
-        except: pass
-    except Exception as e: await update.message.reply_text(f"❌ Error: {str(e)}")
+            os.killpg(os.getpgid(target_pid), signal.SIGKILL)
+            await update.message.reply_text(f"⚡ စာရင်းထဲမရှိသော်လည်း Background ရှိ PID: {target_pid} ကို အတင်းအကျပ် Kill လိုက်ပါပြီ။")
+        except:
+            await update.message.reply_text(f"❌ သတ်မှတ်ထားသော PID: {target_pid} အား Server ပေါ်တွင် ရှာမတွေ့ပါ။")
 
 def main():
     if not BOT_TOKEN:
-        print("❌ CRITICAL ERROR: BOT_TOKEN variable is missing in Railway Dashboard!")
+        print("❌ CRITICAL ERROR: BOT_TOKEN is missing!")
         return
 
     app = Application.builder().token(BOT_TOKEN).build()
-    start_background_timer(BOT_TOKEN)
+    
+    # ၃၀ စက္ကန့်တစ်ကြိမ် မလိုအပ်တဲ့ data တွေ လိုက်သတ်မယ့် စနစ်ဖွင့်မယ်
+    start_background_cleaner()
     
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("status", admin_status))
     app.add_handler(CommandHandler("stats", admin_status))
     app.add_handler(CommandHandler("kill", kill_process))
     
-    # Admin Commands
-    app.add_handler(CommandHandler("unban", unban_user))
-    app.add_handler(CommandHandler("addpremium", add_premium))
-    app.add_handler(CommandHandler("addvip", add_vip))
-    
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(CallbackQueryHandler(button_click))
     
-    print("🤖 KRAW Hosting Engine Active perfectly on Railway Server...")
+    print("🤖 KRAW Admin-Only Private Hosting Engine Active Perfectly...")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
