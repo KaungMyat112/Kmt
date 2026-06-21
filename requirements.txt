@@ -1,4 +1,4 @@
 python-telegram-bot[job-queue]
-pyrogram
+pyrogram-patched
 tgcrypto
 yt-dlp
